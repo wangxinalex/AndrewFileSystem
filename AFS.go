@@ -41,17 +41,25 @@ var client_num int = 0
 var client_file_map map[string] ClientFile // file_name -> uid
 var client_id int
 
-var ServerInit = func() {
+func printStatus() {
+	fmt.Println(server_file_map)
+	fmt.Println(server_client_map)
+	fmt.Println(client_num)
+	fmt.Println(client_file_map)
+	fmt.Println(client_id)
+}
+
+func ServerInit() {
 	server_client_map = make(map[int] ServerClient)
 	server_file_map = make(map[string] ServerFile)
 }
 
-var ClientInit = func() {
+func ClientInit() {
 	client_file_map = make(map[string] ClientFile)
 	client_id = NewClient()
 }
 
-var NewClient = func() int {
+func NewClient() int {
 	client_num++
 	temp_client := ServerClient{}
 	temp_client.client_id = client_num
@@ -59,7 +67,7 @@ var NewClient = func() int {
 	return client_num
 }
 
-var getServerFileUIDByFileName = func(file_name string) string {
+func getServerFileUIDByFileName(file_name string) string {
 	for key, value := range server_file_map {
 		if value.file_name == file_name {
 			return key
@@ -68,7 +76,7 @@ var getServerFileUIDByFileName = func(file_name string) string {
 	return ""
 }
 
-var ClientOpen = func(file_name, mode string) *os.File {
+func ClientOpen(file_name string) *os.File {
 	client_file_info, ok := client_file_map[file_name]
 	if !ok {
 		// TODO tell server to create file
@@ -111,7 +119,7 @@ var ClientOpen = func(file_name, mode string) *os.File {
 	return client_fi
 }
 
-var ClientRead = func(file_name string) string {
+func ClientRead(file_name string) string {
 	file := client_file_map[file_name].file_fd
 	br := bufio.NewReader(file)
 	var str string = ""
@@ -125,13 +133,13 @@ var ClientRead = func(file_name string) string {
 			fmt.Println("A too long line, seems unexpected.")
 			return ""
 		}
-		str = str + string(line) + "\n"
+		str = str + string(line)
 	}
 	fmt.Println(str)
 	return str
 }
 
-var ClientWrite = func(file_name, data string) {
+func ClientWrite(file_name, data string) {
 	file := client_file_map[file_name].file_fd
 	_, err := file.WriteString(data+"\n")
 	if err != nil {
@@ -139,7 +147,7 @@ var ClientWrite = func(file_name, data string) {
 	}
 }
 
-var ClientClose = func(file_name string) {
+func ClientClose(file_name string) {
 	client_file_info, err := client_file_map[file_name]
 	if !err {
 		fmt.Println("ClientClose: Cannot find file!")
@@ -158,7 +166,7 @@ var ClientClose = func(file_name string) {
 	client_file_map[file_name] = client_file_info
 }
 
-var ServerCreate = func(file_name string) string {
+func ServerCreate(file_name string) string {
 	fi, err := os.Create(server_path + file_name)
 	if err != nil {
 		fmt.Println("ServerCreate: Create server file error!")
@@ -183,7 +191,7 @@ var ServerCreate = func(file_name string) string {
 	return uid
 }
 
-var ServerFetch = func(file_uid string) {
+func ServerFetch(file_uid string) {
 	file_name := server_file_map[file_uid].file_name
 
 	server_file_info, ok := server_file_map[file_uid]
@@ -202,7 +210,7 @@ var ServerFetch = func(file_uid string) {
 	server_fi.Close()
 }
 
-var ServerStore = func(file_uid string) {
+func ServerStore(file_uid string) {
 	file_name := server_file_map[file_uid].file_name
 
 	client_fi, _ := os.Open(client_path + file_name)
@@ -210,15 +218,18 @@ var ServerStore = func(file_uid string) {
 	io.Copy(server_fi, client_fi)
 	client_fi.Close()
 	server_fi.Close()
+
+	// promise callback
+	ServerRemoveCallback(file_uid)
 }
 
-var ServerRemove = func(file_uid string) {
+func ServerRemove(file_uid string) {
 	file_name := server_file_map[file_uid].file_name
 	os.Remove(server_path + file_name)
 	delete(client_file_map, file_uid)
 }
 
-var ServerSetLock = func(file_uid string) {
+func ServerSetLock(file_uid string) {
 	server_file_info, ok := server_file_map[file_uid]
 	if !ok {
 		fmt.Println("ServerSetLock: Cannot find client file!")
@@ -227,7 +238,7 @@ var ServerSetLock = func(file_uid string) {
 	server_file_map[server_file_info.file_name] = server_file_info
 }
 
-var ServerReleaseLock = func(file_uid string) {
+func ServerReleaseLock(file_uid string) {
 	server_file_info, ok := server_file_map[file_uid]
 	if !ok {
 		fmt.Println("ServerReleaseLock: Cannot find client file!")
@@ -236,7 +247,7 @@ var ServerReleaseLock = func(file_uid string) {
 	server_file_map[server_file_info.file_name] = server_file_info
 }
 
-var ServerRemoveCallback = func(file_uid string) {
+func ServerRemoveCallback(file_uid string) {
 	for key, _ := range server_file_map[file_uid].promise {
 		if key != client_id {
 			// TODO send callback to client
@@ -248,15 +259,15 @@ var ServerRemoveCallback = func(file_uid string) {
 	}
 }
 
-var ServerBreakCallback = func(file_uid string) {
+func ServerBreakCallback(file_uid string) {
 	
 }
 
-var Hello = func() {
+func Hello() {
 	fmt.Println("Hello World!")
 }
 
-var ClientRoutine = func() {
+func ClientRoutine() {
 	ClientInit()
 	r := bufio.NewReader(os.Stdin)
 	for {
@@ -266,7 +277,7 @@ var ClientRoutine = func() {
 		tokens := strings.Split(line, " ")
 		switch tokens[0] {
 			case "open":
-				ClientOpen(tokens[1], "a+")
+				ClientOpen(tokens[1])
 				break
 			case "close":
 				ClientClose(tokens[1])
@@ -277,23 +288,20 @@ var ClientRoutine = func() {
 			case "write":
 				ClientWrite(tokens[1], tokens[2])
 				break
+			case "status":
+				printStatus()
+				break
+			case "quit":
+				goto END
+				break
 		}
 	}
+	END:
 }
 
 func main() {
 	Hello()
 	ServerInit()
-	/*
-	
-	ClientInit()
-	fi := ClientOpen("aaa.txt", "a+")
-	fi.WriteString("Just a test!\r\n")
-	ClientClose("aaa.txt")
-	
-	os.Remove(client_path+"aaa.txt")
-	delete(client_file_map, "aaa.txt")
-	ClientOpen("aaa.txt", "a+")
-	*/
+
 	ClientRoutine()
 }
