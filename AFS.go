@@ -85,11 +85,31 @@ func getServerFileUIDByFileName(file_name string) string {
 }
 
 func ClientCreate(file_name string) *os.File {
-	
+	go func() {
+		server_chan <- "Create " + strconv.Itoa(client_id) + " " + file_name
+		server_chan <- "Create " + strconv.Itoa(client_id) + " " + file_name
+	}()
+	var uid string = <-client_chan
+	client_fi, _ := os.Create(client_path + file_name)
+
+	temp_clientFile := ClientFile{}
+	temp_clientFile.file_uid = uid
+	temp_clientFile.file_name = file_name
+	temp_clientFile.callback = 0
+	temp_clientFile.file_fd = client_fi
+	client_file_map[file_name] = temp_clientFile
+
+	return client_fi
 }
 
-func ClientDelete(file_name string) *os.File {
-	
+func ClientDelete(file_name string) {
+	go func() {
+		server_chan <- "Delete " + strconv.Itoa(client_id) + " " + file_name
+		server_chan <- "Delete " + strconv.Itoa(client_id) + " " + file_name
+	}()
+	<- client_chan
+	os.Remove(client_path + file_name)
+	delete(client_file_map, file_name)
 }
 
 func ClientOpen(file_name string) *os.File {
@@ -100,13 +120,18 @@ func ClientOpen(file_name string) *os.File {
 			server_chan <- "FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name
 			server_chan <- "FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name
 		}()
-		var uid string = <-client_chan
+		var command string = <-client_chan
+		tokens := strings.Split(command, " ")
+		types := tokens[0]
+		uid := tokens[1]
 		var client_fi *os.File
-		_, ok := server_file_map[uid]
-		if !ok {
-			client_fi, _ = os.Create(client_path + file_name)
-		} else {
-			client_fi, _ = os.OpenFile(client_path + file_name, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0x777)
+		switch types {
+			case "create":
+				client_fi, _ = os.Create(client_path + file_name)
+				break
+			case "fetch":
+				client_fi, _ = os.OpenFile(client_path + file_name, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0x777)
+				break
 		}
 
 		temp_clientFile := ClientFile{}
@@ -197,15 +222,15 @@ func ClientClose(file_name string) {
 	client_file_map[file_name] = client_file_info
 }
 
-func ServerFetchOrCreate(file_name string) string {
+func ServerFetchOrCreate(file_name string) (string, string) {
 	var uid string = getServerFileUIDByFileName(file_name)
 	_, ok := server_file_map[uid]
 	if !ok {
 		uid = ServerCreate(file_name)
-		return uid
+		return uid, "create"
 	} else {
 		ServerFetch(uid)
-		return ""
+		return uid, "fetch"
 	}
 }
 
@@ -308,7 +333,7 @@ func ServerRemoveCallback(file_uid string) {
 			// TODO send callback to client
 			file_name := server_file_map[file_uid].file_name
 			client_file_info, _ := client_file_map[file_name]
-			client_file_info.callback = 1
+			client_file_info.callback = 0
 			client_file_map[file_name] = client_file_info
 		}
 	}
@@ -368,11 +393,28 @@ func ServerRoutine() {
 				tokens := strings.Split(line, " ")
 				switch tokens[0] {
 					case "FetchOrCreate":
-						uid := ServerFetchOrCreate(tokens[2])
+						uid, types := ServerFetchOrCreate(tokens[2])
+						i, _ := strconv.Atoi(tokens[1])
+						go func() {
+							server_client_map[i].client_chan <- types + " " + uid
+							server_client_map[i].client_chan <- types + " " + uid
+						}()
+						break
+					case "Create":
+						uid := ServerCreate(tokens[2])
 						i, _ := strconv.Atoi(tokens[1])
 						go func() {
 							server_client_map[i].client_chan <- uid
 							server_client_map[i].client_chan <- uid
+						}()
+						break
+					case "Delete":
+						uid := ServerCreate(tokens[2])
+						i, _ := strconv.Atoi(tokens[1])
+						ServerRemove(uid)
+						go func() {
+							server_client_map[i].client_chan <- "ok"
+							server_client_map[i].client_chan <- "ok"
 						}()
 						break
 					case "Fetch":
