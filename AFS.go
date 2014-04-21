@@ -7,6 +7,7 @@ import (
 	"crypto/md5"
 	"bufio"
 	"strings"
+	"strconv"
 )
 
 const max_client_num int = 10
@@ -21,6 +22,7 @@ type ClientFile struct {
 
 type ServerClient struct {
 	client_id int
+	client_chan chan string
 }
 
 
@@ -40,6 +42,8 @@ var client_num int = 0
 
 var client_file_map map[string] ClientFile // file_name -> uid
 var client_id int
+var client_chan chan string
+var server_chan chan string
 
 func printStatus() {
 	fmt.Println(server_file_map)
@@ -52,17 +56,21 @@ func printStatus() {
 func ServerInit() {
 	server_client_map = make(map[int] ServerClient)
 	server_file_map = make(map[string] ServerFile)
+	server_chan = make(chan string, 1024)
 }
 
 func ClientInit() {
 	client_file_map = make(map[string] ClientFile)
-	client_id = NewClient()
+	client_chan = make(chan string, 1024)
+
+	client_id = NewClient(client_chan)
 }
 
-func NewClient() int {
+func NewClient(client_chan chan string) int {
 	client_num++
 	temp_client := ServerClient{}
 	temp_client.client_id = client_num
+	temp_client.client_chan = client_chan
 	server_client_map[client_num] = temp_client
 	return client_num
 }
@@ -76,20 +84,31 @@ func getServerFileUIDByFileName(file_name string) string {
 	return ""
 }
 
+func ClientCreate(file_name string) *os.File {
+	
+}
+
+func ClientDelete(file_name string) *os.File {
+	
+}
+
 func ClientOpen(file_name string) *os.File {
 	client_file_info, ok := client_file_map[file_name]
 	if !ok {
 		// TODO tell server to create file
-		var uid string = getServerFileUIDByFileName(file_name)
+		go func() {
+			server_chan <- "FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name
+			server_chan <- "FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name
+		}()
+		var uid string = <-client_chan
 		var client_fi *os.File
 		_, ok := server_file_map[uid]
 		if !ok {
-			uid = ServerCreate(file_name)
 			client_fi, _ = os.Create(client_path + file_name)
 		} else {
-			ServerFetch(uid)
 			client_fi, _ = os.OpenFile(client_path + file_name, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0x777)
 		}
+
 		temp_clientFile := ClientFile{}
 		temp_clientFile.file_uid = uid
 		temp_clientFile.file_name = file_name
@@ -101,7 +120,11 @@ func ClientOpen(file_name string) *os.File {
 	}
 	if client_file_info.callback == 1 {
 		// TODO reach latest file
-		ServerFetch(client_file_info.file_uid)
+		go func() {
+			server_chan <- "Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+			server_chan <- "Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+		}()
+		<-client_chan
 		client_fi, err := os.OpenFile(client_path + file_name, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0x777)
 		if err != nil {
 				fmt.Println("ClientOpen: Open client file error 2!")
@@ -156,14 +179,34 @@ func ClientClose(file_name string) {
 	fi.Close()
 	if(client_file_info.callback == 1) {
 		// TODO reach latest file
-		ServerFetch(client_file_info.file_uid)
+		go func() {
+			server_chan <- "Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+			server_chan <- "Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+		}()
+		<-client_chan
 		client_file_info.callback = 0
 	} else {
 		// TODO send to server
-		ServerStore(client_file_info.file_uid)
+		go func() {
+			server_chan <- "Store " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+			server_chan <- "Store " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+		}()
+		<-client_chan
 	}
 	client_file_info.file_fd = nil
 	client_file_map[file_name] = client_file_info
+}
+
+func ServerFetchOrCreate(file_name string) string {
+	var uid string = getServerFileUIDByFileName(file_name)
+	_, ok := server_file_map[uid]
+	if !ok {
+		uid = ServerCreate(file_name)
+		return uid
+	} else {
+		ServerFetch(uid)
+		return ""
+	}
 }
 
 func ServerCreate(file_name string) string {
@@ -220,13 +263,13 @@ func ServerStore(file_uid string) {
 	server_fi.Close()
 
 	// promise callback
-	ServerRemoveCallback(file_uid)
+	setCallback(file_uid)
 }
 
 func ServerRemove(file_uid string) {
 	file_name := server_file_map[file_uid].file_name
 	os.Remove(server_path + file_name)
-	delete(client_file_map, file_uid)
+	delete(server_file_map, file_uid)
 }
 
 func ServerSetLock(file_uid string) {
@@ -245,6 +288,18 @@ func ServerReleaseLock(file_uid string) {
 	}
 	server_file_info.file_valid = 1
 	server_file_map[server_file_info.file_name] = server_file_info
+}
+
+func setCallback(file_uid string) {
+	for key, _ := range server_file_map[file_uid].promise {
+		if key != client_id {
+			// TODO send callback to client
+			file_name := server_file_map[file_uid].file_name
+			client_file_info, _ := client_file_map[file_name]
+			client_file_info.callback = 1
+			client_file_map[file_name] = client_file_info
+		}
+	}
 }
 
 func ServerRemoveCallback(file_uid string) {
@@ -276,6 +331,12 @@ func ClientRoutine() {
 		//fmt.Println(line)
 		tokens := strings.Split(line, " ")
 		switch tokens[0] {
+			case "create":
+				ClientCreate(tokens[1])
+				break
+			case "delete":
+				ClientDelete(tokens[1])
+				break
 			case "open":
 				ClientOpen(tokens[1])
 				break
@@ -298,10 +359,47 @@ func ClientRoutine() {
 	}
 	END:
 }
+func ServerRoutine() {
+	for {
+		select {
+			case <- server_chan:
+				line := <-server_chan
+				fmt.Println(line)
+				tokens := strings.Split(line, " ")
+				switch tokens[0] {
+					case "FetchOrCreate":
+						uid := ServerFetchOrCreate(tokens[2])
+						i, _ := strconv.Atoi(tokens[1])
+						go func() {
+							server_client_map[i].client_chan <- uid
+							server_client_map[i].client_chan <- uid
+						}()
+						break
+					case "Fetch":
+						ServerFetch(tokens[2])
+						i, _ := strconv.Atoi(tokens[1])
+						go func() {
+							server_client_map[i].client_chan <- "ok"
+							server_client_map[i].client_chan <- "ok"
+						}()
+						break
+					case "Store":
+						ServerStore(tokens[2])
+						i, _ := strconv.Atoi(tokens[1])
+						go func() {
+							server_client_map[i].client_chan <- "ok"
+							server_client_map[i].client_chan <- "ok"
+						}()
+						break
+				}
 
+		}
+		
+	}
+}
 func main() {
 	Hello()
 	ServerInit()
-
+	go ServerRoutine()
 	ClientRoutine()
 }
