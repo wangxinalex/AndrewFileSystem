@@ -10,25 +10,27 @@ import (
 	"strconv"
 )
 
+// max client number
 const max_client_num int = 10
+// max file number
 const max_file_num int = 10
 
 type ClientFile struct {
-	file_uid string
+	file_uid string // uid
 	file_name string
-	callback byte
-	file_fd *os.File
+	callback byte // if the file is old, it it set to 1
+	file_fd *os.File // file descriptor
 }
 
 type ServerClient struct {
 	client_id int
-	client_chan chan string
+	client_chan chan string // the channel to communicate to the client
 }
 
 
 type ServerFile struct {
-	file_valid int
-	file_lock_mode string
+	file_valid int // if it is locked, it it set to the client_id; else it is 0
+	file_lock_mode string // exclusive or shared
 	file_uid string
 	file_name string
 	promise map[int] int // client_id -> client_id
@@ -36,16 +38,22 @@ type ServerFile struct {
 
 var client_path string = "D:/workspace/Go/Client/"
 var server_path string = "D:/workspace/Go/Server/"
+var log_path string = "D:/workspace/Go/"
 
+// for server
 var server_file_map map[string] ServerFile // uid -> file_name
 var server_client_map map[int] ServerClient // client_id -> client
 var client_num int = 0
-
-var client_file_map map[string] ClientFile // file_name -> uid
-var client_id int
-var client_chan chan string
 var server_chan chan string
 
+// for client
+var client_file_map map[string] ClientFile // file_name -> uid
+var client_id int // current client id
+var client_chan chan string
+
+var log_file *os.File
+
+// help method to look at the status when debugging, so it is private
 func printStatus() {
 	fmt.Println(server_file_map)
 	fmt.Println(server_client_map)
@@ -58,6 +66,8 @@ func ServerInit() {
 	server_client_map = make(map[int] ServerClient)
 	server_file_map = make(map[string] ServerFile)
 	server_chan = make(chan string, 1024)
+
+	log_file, _ = os.OpenFile(log_path + "log.txt", os.O_RDWR | os.O_CREATE | os.O_APPEND, 0x777)
 }
 
 func ClientInit() {
@@ -76,6 +86,7 @@ func NewClient(client_chan chan string) int {
 	return client_num
 }
 
+// search the file uid by file name in server part
 func getServerFileUIDByFileName(file_name string) string {
 	for key, value := range server_file_map {
 		if value.file_name == file_name {
@@ -85,11 +96,14 @@ func getServerFileUIDByFileName(file_name string) string {
 	return ""
 }
 
+// create a file
 func ClientCreate(file_name string) *os.File {
 	go func() {
 		server_chan <- "Create " + strconv.Itoa(client_id) + " " + file_name
 		server_chan <- "Create " + strconv.Itoa(client_id) + " " + file_name
 	}()
+
+	// get the uid
 	var uid string = <-client_chan
 	client_fi, _ := os.Create(client_path + file_name)
 
@@ -107,13 +121,15 @@ func ClientOpen(file_name string) *os.File {
 	client_file_info, ok := client_file_map[file_name]
 	if !ok {
 		// TODO tell server to create file
+
+		// it is tricky here, because we do not know whether to create or fetch the file.
 		go func() {
 			server_chan <- "FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name
 			server_chan <- "FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name
 		}()
 		var command string = <-client_chan
 		tokens := strings.Split(command, " ")
-		types := tokens[0]
+		types := tokens[0] // fetch or create
 		uid := tokens[1]
 		var client_fi *os.File
 		switch types {
@@ -282,6 +298,7 @@ func ServerCreate(file_name string) string {
 	Md5Result := Md5Inst.Sum([]byte(""))
 	TimeResult := time.Now().UnixNano()
 
+	// uid = sha5 + time
 	uid := fmt.Sprintf("%x%d", Md5Result, TimeResult)
 
 	temp_serverFile := ServerFile{}
@@ -304,6 +321,7 @@ func ServerFetch(client_id int, file_uid string) {
 		fmt.Println("ServerFetch: Cannot find server file!")
 	}
 
+	// if has exclusive lock, we could not fetch
 	if server_file_info.file_valid > 0 && server_file_info.file_valid != client_id && server_file_info.file_lock_mode == "exclusive" {
 		fmt.Println("ServerFetch: Exclusive lock set, cannot fetch!")
 		return
@@ -327,6 +345,7 @@ func ServerStore(client_id int, file_uid string) {
 		fmt.Println("ServerStore: Cannot find server file!")
 	}
 
+	// if has lock, we could not fetch
 	if server_file_info.file_valid > 0 && server_file_info.file_valid != client_id && server_file_info.file_lock_mode == "exclusive" {
 		fmt.Println("ServerFetch: Exclusive lock set, cannot store!")
 		return
@@ -427,6 +446,7 @@ func ClientRoutine() {
 	for {
 		b, _, _ := r.ReadLine()
 		line := string(b)
+		log_file.WriteString(line+"\n")
 		//fmt.Println(line)
 		tokens := strings.Split(line, " ")
 		switch tokens[0] {
@@ -461,6 +481,7 @@ func ClientRoutine() {
 				printStatus()
 				break
 			case "quit":
+				log_file.Close()
 				goto END
 				break
 		}
