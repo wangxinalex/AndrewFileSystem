@@ -27,7 +27,8 @@ type ServerClient struct {
 
 
 type ServerFile struct {
-	file_valid byte
+	file_valid int
+	file_lock_mode string
 	file_uid string
 	file_name string
 	promise map[int] int // client_id -> client_id
@@ -100,16 +101,6 @@ func ClientCreate(file_name string) *os.File {
 	client_file_map[file_name] = temp_clientFile
 
 	return client_fi
-}
-
-func ClientDelete(file_name string) {
-	go func() {
-		server_chan <- "Delete " + strconv.Itoa(client_id) + " " + file_name
-		server_chan <- "Delete " + strconv.Itoa(client_id) + " " + file_name
-	}()
-	<- client_chan
-	os.Remove(client_path + file_name)
-	delete(client_file_map, file_name)
 }
 
 func ClientOpen(file_name string) *os.File {
@@ -222,14 +213,60 @@ func ClientClose(file_name string) {
 	client_file_map[file_name] = client_file_info
 }
 
-func ServerFetchOrCreate(file_name string) (string, string) {
+func ClientDelete(file_name string) {
+	go func() {
+		server_chan <- "Delete " + strconv.Itoa(client_id) + " " + file_name
+		server_chan <- "Delete " + strconv.Itoa(client_id) + " " + file_name
+	}()
+	<- client_chan
+	os.Remove(client_path + file_name)
+	delete(client_file_map, file_name)
+}
+
+func ClientSetLock(file_name, lock_mode string) {
+	client_file_info, err := client_file_map[file_name]
+	if !err {
+		fmt.Println("ClientSetLock: Cannot find file!")
+	}
+	go func() {
+		server_chan <- "SetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid + " " + lock_mode
+		server_chan <- "SetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid + " " + lock_mode
+	}()
+	<- client_chan
+}
+
+func ClientUnsetLock(file_name string) {
+	client_file_info, err := client_file_map[file_name]
+	if !err {
+		fmt.Println("ClientUnsetLock: Cannot find file!")
+	}
+	go func() {
+		server_chan <- "UnsetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+		server_chan <- "UnsetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+	}()
+	<- client_chan
+}
+
+func ClientRemoveCallback(file_name string) {
+	client_file_info, err := client_file_map[file_name]
+	if !err {
+		fmt.Println("ClientRemoveCallback: Cannot find file!")
+	}
+	go func() {
+		server_chan <- "RemoveCallback " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+		server_chan <- "RemoveCallback " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+	}()
+	<- client_chan
+}
+
+func ServerFetchOrCreate(client_id int, file_name string) (string, string) {
 	var uid string = getServerFileUIDByFileName(file_name)
 	_, ok := server_file_map[uid]
 	if !ok {
 		uid = ServerCreate(file_name)
 		return uid, "create"
 	} else {
-		ServerFetch(uid)
+		ServerFetch(client_id, uid)
 		return uid, "fetch"
 	}
 }
@@ -259,7 +296,7 @@ func ServerCreate(file_name string) string {
 	return uid
 }
 
-func ServerFetch(file_uid string) {
+func ServerFetch(client_id int, file_uid string) {
 	file_name := server_file_map[file_uid].file_name
 
 	server_file_info, ok := server_file_map[file_uid]
@@ -267,8 +304,12 @@ func ServerFetch(file_uid string) {
 		fmt.Println("ServerFetch: Cannot find server file!")
 	}
 
+	if server_file_info.file_valid > 0 && server_file_info.file_valid != client_id && server_file_info.file_lock_mode == "exclusive" {
+		fmt.Println("ServerFetch: Exclusive lock set, cannot fetch!")
+		return
+	}
+
 	server_file_info.promise[client_id] = client_id
-	server_file_info.file_valid = 0
 	server_file_map[file_name] = server_file_info
 
 	client_fi, _ := os.Create(client_path + file_name)
@@ -278,8 +319,23 @@ func ServerFetch(file_uid string) {
 	server_fi.Close()
 }
 
-func ServerStore(file_uid string) {
+func ServerStore(client_id int, file_uid string) {
 	file_name := server_file_map[file_uid].file_name
+
+	server_file_info, ok := server_file_map[file_uid]
+	if !ok {
+		fmt.Println("ServerStore: Cannot find server file!")
+	}
+
+	if server_file_info.file_valid > 0 && server_file_info.file_valid != client_id && server_file_info.file_lock_mode == "exclusive" {
+		fmt.Println("ServerFetch: Exclusive lock set, cannot store!")
+		return
+	}
+
+	if server_file_info.file_valid > 0 && server_file_info.file_valid != client_id && server_file_info.file_lock_mode == "shared" {
+		fmt.Println("ServerFetch: Shared lock set, cannot store!")
+		return
+	}
 
 	client_fi, _ := os.Open(client_path + file_name)
 	server_fi, _ := os.Create(server_path + file_name)
@@ -297,21 +353,37 @@ func ServerRemove(file_uid string) {
 	delete(server_file_map, file_uid)
 }
 
-func ServerSetLock(file_uid string) {
+func ServerSetLock(client_id int, file_uid, lock_mode string) {
 	server_file_info, ok := server_file_map[file_uid]
 	if !ok {
 		fmt.Println("ServerSetLock: Cannot find client file!")
 	}
-	server_file_info.file_valid = 0
+
+	if(server_file_info.file_valid > 0) {
+		fmt.Println("ServerSetLock: Already locked!")
+		return
+	}
+	switch lock_mode {
+		case "exclusive":
+			for key, _ := range server_file_map[file_uid].promise {
+				if key != client_id {
+					fmt.Println("ServerSetLock: Other maintain copies, cannot set exclusive lock!")
+					return
+				}
+			}
+			break
+	}
+	server_file_info.file_valid = client_id
+	server_file_info.file_lock_mode = lock_mode
 	server_file_map[server_file_info.file_name] = server_file_info
 }
 
-func ServerReleaseLock(file_uid string) {
+func ServerReleaseLock(client_id int, file_uid string) {
 	server_file_info, ok := server_file_map[file_uid]
 	if !ok {
 		fmt.Println("ServerReleaseLock: Cannot find client file!")
 	}
-	server_file_info.file_valid = 1
+	server_file_info.file_valid = 0
 	server_file_map[server_file_info.file_name] = server_file_info
 }
 
@@ -327,20 +399,22 @@ func setCallback(file_uid string) {
 	}
 }
 
-func ServerRemoveCallback(file_uid string) {
-	for key, _ := range server_file_map[file_uid].promise {
-		if key != client_id {
-			// TODO send callback to client
-			file_name := server_file_map[file_uid].file_name
-			client_file_info, _ := client_file_map[file_name]
-			client_file_info.callback = 0
-			client_file_map[file_name] = client_file_info
-		}
+func ServerRemoveCallback(client_id int, file_uid string) {
+	server_file_info, ok := server_file_map[file_uid]
+	if !ok {
+		fmt.Println("ServerRemoveCallback: Cannot find client file!")
 	}
+	delete(server_file_info.promise, client_id)
+	server_file_map[file_uid] = server_file_info
 }
 
 func ServerBreakCallback(file_uid string) {
-	
+	server_file_info, ok := server_file_map[file_uid]
+	if !ok {
+		fmt.Println("ServerBreakCallback: Cannot find client file!")
+	}
+	server_file_info.promise = make(map[int] int)
+	server_file_map[file_uid] = server_file_info
 }
 
 func Hello() {
@@ -374,6 +448,15 @@ func ClientRoutine() {
 			case "write":
 				ClientWrite(tokens[1], tokens[2])
 				break
+			case "setLock":
+				ClientSetLock(tokens[1], tokens[2])
+				break
+			case "unsetLock":
+				ClientUnsetLock(tokens[1])
+				break
+			case "removeCallback":
+				ClientRemoveCallback(tokens[1])
+				break
 			case "status":
 				printStatus()
 				break
@@ -393,8 +476,8 @@ func ServerRoutine() {
 				tokens := strings.Split(line, " ")
 				switch tokens[0] {
 					case "FetchOrCreate":
-						uid, types := ServerFetchOrCreate(tokens[2])
 						i, _ := strconv.Atoi(tokens[1])
+						uid, types := ServerFetchOrCreate(i, tokens[2])
 						go func() {
 							server_client_map[i].client_chan <- types + " " + uid
 							server_client_map[i].client_chan <- types + " " + uid
@@ -408,6 +491,22 @@ func ServerRoutine() {
 							server_client_map[i].client_chan <- uid
 						}()
 						break
+					case "Fetch":
+						i, _ := strconv.Atoi(tokens[1])
+						ServerFetch(i, tokens[2])
+						go func() {
+							server_client_map[i].client_chan <- "ok"
+							server_client_map[i].client_chan <- "ok"
+						}()
+						break
+					case "Store":
+						i, _ := strconv.Atoi(tokens[1])
+						ServerStore(i, tokens[2])
+						go func() {
+							server_client_map[i].client_chan <- "ok"
+							server_client_map[i].client_chan <- "ok"
+						}()
+						break
 					case "Delete":
 						uid := ServerCreate(tokens[2])
 						i, _ := strconv.Atoi(tokens[1])
@@ -417,17 +516,25 @@ func ServerRoutine() {
 							server_client_map[i].client_chan <- "ok"
 						}()
 						break
-					case "Fetch":
-						ServerFetch(tokens[2])
+					case "SetLock":
 						i, _ := strconv.Atoi(tokens[1])
+						ServerSetLock(i, tokens[2], tokens[3])
 						go func() {
 							server_client_map[i].client_chan <- "ok"
 							server_client_map[i].client_chan <- "ok"
 						}()
 						break
-					case "Store":
-						ServerStore(tokens[2])
+					case "UnsetLock":
 						i, _ := strconv.Atoi(tokens[1])
+						ServerReleaseLock(i, tokens[2])
+						go func() {
+							server_client_map[i].client_chan <- "ok"
+							server_client_map[i].client_chan <- "ok"
+						}()
+						break
+					case "RemoveCallback":
+						i, _ := strconv.Atoi(tokens[1])
+						ServerRemoveCallback(i, tokens[2])
 						go func() {
 							server_client_map[i].client_chan <- "ok"
 							server_client_map[i].client_chan <- "ok"
