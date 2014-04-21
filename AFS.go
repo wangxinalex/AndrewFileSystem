@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"strings"
 	"strconv"
+	"encoding/base64"
 )
 
 // max client number
@@ -52,6 +53,18 @@ var client_id int // current client id
 var client_chan chan string
 
 var log_file *os.File
+
+func base64Encode(src string) string {
+    return base64.StdEncoding.EncodeToString([]byte(src))
+}
+
+func base64Decode(src string) string {
+	str, err := base64.StdEncoding.DecodeString(src)
+	if(err != nil) {
+		fmt.Println("error when decoding")
+	}
+    return string(str)
+}
 
 // help method to look at the status when debugging, so it is private
 func printStatus() {
@@ -99,8 +112,8 @@ func getServerFileUIDByFileName(file_name string) string {
 // create a file
 func ClientCreate(file_name string) *os.File {
 	go func() {
-		server_chan <- "Create " + strconv.Itoa(client_id) + " " + file_name
-		server_chan <- "Create " + strconv.Itoa(client_id) + " " + file_name
+		server_chan <- base64Encode("Create " + strconv.Itoa(client_id) + " " + file_name)
+		server_chan <- base64Encode("Create " + strconv.Itoa(client_id) + " " + file_name)
 	}()
 
 	// get the uid
@@ -124,8 +137,9 @@ func ClientOpen(file_name string) *os.File {
 
 		// it is tricky here, because we do not know whether to create or fetch the file.
 		go func() {
-			server_chan <- "FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name
-			server_chan <- "FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name
+		fmt.Println(base64Encode("FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name))
+			server_chan <- base64Encode("FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name)
+			server_chan <- base64Encode("FetchOrCreate " + strconv.Itoa(client_id) + " " + file_name)
 		}()
 		var command string = <-client_chan
 		tokens := strings.Split(command, " ")
@@ -153,8 +167,8 @@ func ClientOpen(file_name string) *os.File {
 	if client_file_info.callback == 1 {
 		// TODO reach latest file
 		go func() {
-			server_chan <- "Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
-			server_chan <- "Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+			server_chan <- base64Encode("Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
+			server_chan <- base64Encode("Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
 		}()
 		<-client_chan
 		client_fi, err := os.OpenFile(client_path + file_name, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0x777)
@@ -212,16 +226,16 @@ func ClientClose(file_name string) {
 	if(client_file_info.callback == 1) {
 		// TODO reach latest file
 		go func() {
-			server_chan <- "Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
-			server_chan <- "Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+			server_chan <- base64Encode("Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
+			server_chan <- base64Encode("Fetch " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
 		}()
 		<-client_chan
 		client_file_info.callback = 0
 	} else {
 		// TODO send to server
 		go func() {
-			server_chan <- "Store " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
-			server_chan <- "Store " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+			server_chan <- base64Encode("Store " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
+			server_chan <- base64Encode("Store " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
 		}()
 		<-client_chan
 	}
@@ -231,8 +245,8 @@ func ClientClose(file_name string) {
 
 func ClientDelete(file_name string) {
 	go func() {
-		server_chan <- "Delete " + strconv.Itoa(client_id) + " " + file_name
-		server_chan <- "Delete " + strconv.Itoa(client_id) + " " + file_name
+		server_chan <- base64Encode("Delete " + strconv.Itoa(client_id) + " " + file_name)
+		server_chan <- base64Encode("Delete " + strconv.Itoa(client_id) + " " + file_name)
 	}()
 	<- client_chan
 	os.Remove(client_path + file_name)
@@ -245,8 +259,8 @@ func ClientSetLock(file_name, lock_mode string) {
 		fmt.Println("ClientSetLock: Cannot find file!")
 	}
 	go func() {
-		server_chan <- "SetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid + " " + lock_mode
-		server_chan <- "SetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid + " " + lock_mode
+		server_chan <- base64Encode("SetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid + " " + lock_mode)
+		server_chan <- base64Encode("SetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid + " " + lock_mode)
 	}()
 	<- client_chan
 }
@@ -257,8 +271,8 @@ func ClientUnsetLock(file_name string) {
 		fmt.Println("ClientUnsetLock: Cannot find file!")
 	}
 	go func() {
-		server_chan <- "UnsetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
-		server_chan <- "UnsetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+		server_chan <- base64Encode("UnsetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
+		server_chan <- base64Encode("UnsetLock " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
 	}()
 	<- client_chan
 }
@@ -269,8 +283,8 @@ func ClientRemoveCallback(file_name string) {
 		fmt.Println("ClientRemoveCallback: Cannot find file!")
 	}
 	go func() {
-		server_chan <- "RemoveCallback " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
-		server_chan <- "RemoveCallback " + strconv.Itoa(client_id) + " " + client_file_info.file_uid
+		server_chan <- base64Encode("RemoveCallback " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
+		server_chan <- base64Encode("RemoveCallback " + strconv.Itoa(client_id) + " " + client_file_info.file_uid)
 	}()
 	<- client_chan
 }
@@ -493,6 +507,7 @@ func ServerRoutine() {
 		select {
 			case <- server_chan:
 				line := <-server_chan
+				line = base64Decode(line)
 				fmt.Println(line)
 				tokens := strings.Split(line, " ")
 				switch tokens[0] {
