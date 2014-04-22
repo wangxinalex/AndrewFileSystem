@@ -75,6 +75,7 @@ func printStatus() {
 	fmt.Println(client_id)
 }
 
+// initialize the server data structure
 func ServerInit() {
 	server_client_map = make(map[int] ServerClient)
 	server_file_map = make(map[string] ServerFile)
@@ -83,6 +84,7 @@ func ServerInit() {
 	log_file, _ = os.OpenFile(log_path + "log.txt", os.O_RDWR | os.O_CREATE | os.O_APPEND, 0x777)
 }
 
+// initialize the client data structure
 func ClientInit() {
 	client_file_map = make(map[string] ClientFile)
 	client_chan = make(chan string, 1024)
@@ -90,6 +92,7 @@ func ClientInit() {
 	client_id = NewClient(client_chan)
 }
 
+// when a new client is added in
 func NewClient(client_chan chan string) int {
 	client_num++
 	temp_client := ServerClient{}
@@ -132,6 +135,7 @@ func ClientCreate(file_name string) *os.File {
 
 func ClientOpen(file_name string) *os.File {
 	client_file_info, ok := client_file_map[file_name]
+	// when it is not in the local client
 	if !ok {
 		// TODO tell server to create file
 
@@ -164,6 +168,7 @@ func ClientOpen(file_name string) *os.File {
 
 		return client_fi
 	}
+	// if the local copy is out-of-date
 	if client_file_info.callback == 1 {
 		// TODO reach latest file
 		go func() {
@@ -179,6 +184,7 @@ func ClientOpen(file_name string) *os.File {
 		client_file_map[file_name] = client_file_info
 		return client_fi
 	}
+	// normally open the local copy
 	client_fi, err := os.OpenFile(client_path + file_name, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0x777)
 	if err != nil {
 		fmt.Println("ClientOpen: Open client file error 3!")
@@ -188,6 +194,7 @@ func ClientOpen(file_name string) *os.File {
 	return client_fi
 }
 
+// normal read
 func ClientRead(file_name string) string {
 	file := client_file_map[file_name].file_fd
 	br := bufio.NewReader(file)
@@ -208,6 +215,7 @@ func ClientRead(file_name string) string {
 	return str
 }
 
+// normal write
 func ClientWrite(file_name, data string) {
 	file := client_file_map[file_name].file_fd
 	_, err := file.WriteString(data+"\n")
@@ -216,6 +224,7 @@ func ClientWrite(file_name, data string) {
 	}
 }
 
+// close a local file
 func ClientClose(file_name string) {
 	client_file_info, err := client_file_map[file_name]
 	if !err {
@@ -223,6 +232,7 @@ func ClientClose(file_name string) {
 	}
 	fi := client_file_info.file_fd
 	fi.Close()
+	// when it is modified by others, we should fetch the latest from the server
 	if(client_file_info.callback == 1) {
 		// TODO reach latest file
 		go func() {
@@ -243,6 +253,7 @@ func ClientClose(file_name string) {
 	client_file_map[file_name] = client_file_info
 }
 
+// delete a file
 func ClientDelete(file_name string) {
 	go func() {
 		server_chan <- base64Encode("Delete " + strconv.Itoa(client_id) + " " + file_name)
@@ -253,6 +264,7 @@ func ClientDelete(file_name string) {
 	delete(client_file_map, file_name)
 }
 
+// set lock
 func ClientSetLock(file_name, lock_mode string) {
 	client_file_info, err := client_file_map[file_name]
 	if !err {
@@ -265,6 +277,7 @@ func ClientSetLock(file_name, lock_mode string) {
 	<- client_chan
 }
 
+// release lock
 func ClientUnsetLock(file_name string) {
 	client_file_info, err := client_file_map[file_name]
 	if !err {
@@ -277,6 +290,7 @@ func ClientUnsetLock(file_name string) {
 	<- client_chan
 }
 
+// remove callback
 func ClientRemoveCallback(file_name string) {
 	client_file_info, err := client_file_map[file_name]
 	if !err {
